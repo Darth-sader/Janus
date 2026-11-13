@@ -47,11 +47,26 @@ pip install -r requirements.txt
 python -m pytest                                  # crypto, PKI, platform and end-to-end tests
 python examples/demo.py                           # crypto layer: sign, verify, tamper, benchmark
 python demo_pki.py --fast                         # PKI: classical -> hybrid migration, attacks rejected
-uvicorn migration_platform.main:app --reload      # platform API; open http://127.0.0.1:8000/docs
+uvicorn migration_platform.main:app --reload      # web app: http://127.0.0.1:8000  (API docs: /docs)
 ```
 
-On startup the platform builds a hybrid RSA-4096 + ML-DSA-65 CA hierarchy (set `JANUS_RSA_KEY_SIZE=2048`
-for faster starts) and syncs the algorithm catalog from the crypto layer.
+Run these from the `Janus` folder. On startup the platform builds a hybrid RSA-4096 + ML-DSA-65 CA hierarchy
+(set `JANUS_RSA_KEY_SIZE=2048` for faster starts), syncs the algorithm catalog from the crypto layer, and
+re-issues stored asset certificates. The PKI keeps its state in memory, so a restart starts it fresh.
+
+## Web app
+
+Open http://127.0.0.1:8000 and click **Load demo data** to get a nine-asset grid estate.
+
+| Page | What it shows |
+|---|---|
+| Dashboard | Posture tiles, certificate migration state (classical / hybrid / PQ), recommendations, priorities, plans, checklist progress, assets needing action, CSV report |
+| Asset inventory | Search and filter every asset; **Add asset** registers it, issues its certificate, assesses it and recommends a path |
+| Asset detail | The Discover → Assess → Recommend → Approve → Migrate → Verify tracker, the five assessment dimensions, the explained recommendation, the certificate (verify chain, lifecycle history), the plan and its checklist. One "next step" button walks through the whole migration, and approval asks for the administrator's name |
+| Algorithms | The crypto-agility catalog: implemented targets vs legacy/candidate algorithms, sizes, quantum vulnerability, and live keygen / sign / verify benchmarks |
+
+The frontend is plain HTML, CSS and JavaScript in `migration_platform/frontend/`, with no build step. Its read
+models live in `migration_platform/api/ui.py`.
 
 ### Typical API flow
 
@@ -69,4 +84,7 @@ for faster starts) and syncs the algorithm catalog from the crypto layer.
 - X.509 RSA signatures use PKCS#1 v1.5 and are verified by `cryptography`. The crypto layer's RSA
   provider (RSA-PSS) is used for its own hybrid signatures and benchmarks.
 - The crypto layer's JSON `HybridCertificateModel` is a reference architecture. The PKI issues X.509.
-- The PKI keeps certificates in memory, so a server restart loses them while the platform DB keeps its records.
+- The PKI keeps certificates in memory. After a restart the platform re-issues stored certificates from the
+  new CA hierarchy, so their lifecycle history starts again.
+- Legacy algorithms (RSA-2048/3072, ECDSA, Ed25519) are in the catalog as inventory-only entries, so
+  assets using them are assessed as quantum-vulnerable. They are never offered as migration targets.

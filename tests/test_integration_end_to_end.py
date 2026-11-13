@@ -50,8 +50,8 @@ def client(tmp_path_factory):
 def test_algorithm_catalog_comes_from_crypto_layer(client):
     response = client.post("/algorithms/sync")
     assert response.status_code == 200, response.text
-    # rsa4096, mldsa44/65/87, SLH-DSA sets, RSA4096-MLDSA, picnic candidates
-    assert response.json()["total_received"] >= 6
+    # implemented algorithms plus candidates (picnic, legacy RSA-2048 ...)
+    assert response.json()["total_received"] >= 12
 
 
 def test_substation_classical_to_hybrid(client):
@@ -63,7 +63,7 @@ def test_substation_classical_to_hybrid(client):
         "protocol": "IEC 61850",
     }).json()
     asset_id = asset["asset_id"]
-    client.post("/crypto-configs/", json={"asset_id": asset_id, "algorithm": "rsa4096", "key_size": 4096})
+    client.post("/crypto-configs/", json={"asset_id": asset_id, "algorithm": "rsa2048", "key_size": 2048})
 
     # The asset's current credential: a classical certificate from the PKI.
     cert = client.post("/certificates/issue", json={
@@ -108,3 +108,46 @@ def test_migrate_requires_matching_asset(client):
     }).json()
     response = client.post(f"/certificates/{cert['certificate_id']}/migrate", json={"migration_id": "nope"})
     assert response.status_code == 404
+
+
+def test_frontend_is_served(client):
+    assert client.get("/", follow_redirects=False).headers["location"] == "/app/"
+    page = client.get("/app/")
+    assert page.status_code == 200 and "Janus" in page.text
+    assert client.get("/app/app.js").headers["cache-control"] == "no-cache"
+
+
+def test_demo_data_and_ui_read_models(client):
+    assert client.post("/ui/reset").status_code == 200
+    seeded = client.post("/ui/seed-demo")
+    assert seeded.status_code == 200, seeded.text
+    assert client.post("/ui/seed-demo").status_code == 409   # only into an empty inventory
+
+    overview = client.get("/ui/overview").json()
+    by_name = {a["name"]: a for a in overview["assets"]}
+    assert by_name["substation-017.grid.test"]["recommendation"] == "HYBRID MIGRATION"
+    assert by_name["relay-p44.grid.test"]["recommendation"] == "REPLACEMENT REQUIRED"   # cannot be updated
+    assert by_name["eng-ws-07.grid.test"]["recommendation"] == "MAINTAIN"               # already hybrid
+    assert overview["posture"]["certificates_by_mode"]["hybrid"] == 1
+
+    detail = client.get(f"/ui/assets/{by_name['substation-017.grid.test']['asset_id']}").json()
+    assert detail["assessment"]["evidence"]["security"]["quantum_vulnerable"] is True
+    assert detail["certificates"][0]["mode"] == "classical"
+
+    algorithms = {a["algorithm_id"]: a for a in client.get("/ui/algorithms").json()}
+    assert algorithms["mldsa65"]["implemented"] and not algorithms["rsa2048"]["implemented"]
+
+
+def test_certificates_reissued_after_restart(client):
+    from migration_platform.api import certificates as certificates_api
+    from migration_platform.integrations.bootstrap import build_pki_adapter
+
+    # Simulate a restart: a brand-new, empty PKI.
+    fresh = build_pki_context(PKIConfig(mode=CertMode.HYBRID, rsa_key_size=2048))
+    certificates_api.configure_pki(fresh, build_pki_adapter(fresh))
+    certificate_id = client.get("/certificates/").json()[0]["certificate_id"]
+    assert client.post(f"/certificates/{certificate_id}/validate").status_code == 409
+
+    db = next(app.dependency_overrides[get_db]())
+    assert certificates_api.reissue_after_restart(db) > 0
+    assert client.post(f"/certificates/{certificate_id}/validate").json()["valid"] is True

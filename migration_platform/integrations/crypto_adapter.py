@@ -61,10 +61,24 @@ class CryptoAdapter:
     for algorithm_id, profile in profiles.items()
 }
 
+    def catalog_algorithms(self) -> list[dict[str, Any]]:
+        """Implemented algorithms plus declared candidates (e.g. legacy
+        RSA-2048 found in inventories), so assessments can recognise them."""
+        algorithms = list(self.available_algorithms())
+        list_candidates = getattr(self.catalog, "unavailable_candidates", None)
+
+        if list_candidates is not None:
+            for candidate in list_candidates():
+                algorithms.append(
+                    self.algorithm_details(candidate["algorithm_id"])
+                )
+
+        return algorithms
+
     def get_normalized_algorithms(self) -> list[AlgorithmCapability]:
         normalized = []
 
-        for algorithm in self.available_algorithms():
+        for algorithm in self.catalog_algorithms():
             algorithm_id = algorithm.get("algorithm_id")
 
             if not algorithm_id:

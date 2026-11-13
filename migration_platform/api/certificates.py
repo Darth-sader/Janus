@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from migration_platform.database import get_db
 from migration_platform.models import Asset, Certificate, MigrationPlan
+from pki.lifecycle import LifecycleError
 
 router = APIRouter(
     prefix="/certificates",
@@ -62,6 +63,26 @@ def _sync_record(record: Certificate, info: dict):
     record.synced_at = datetime.now(timezone.utc)
 
 
+def reissue_after_restart(db: Session) -> int:
+    """Re-issue stored certificates from a freshly started PKI.
+
+    The PKI keeps certificates in memory while the platform database is
+    persistent, so after a restart every active record is re-issued in its
+    recorded mode (same subject) and relinked. Returns how many were re-issued.
+    """
+    count = 0
+    for record in db.query(Certificate).filter(Certificate.status != "REVOKED").all():
+        common_name = (record.subject or "").split("CN=")[-1].split(",")[0]
+        if not common_name or not record.mode:
+            continue
+        managed = _pki_context.manager.issue(_pki_context.intermediate, common_name, mode=record.mode)
+        record.external_cert_id = managed.cert_id
+        _sync_record(record, managed.to_dict())
+        count += 1
+    db.commit()
+    return count
+
+
 def certificate_to_dict(record: Certificate):
     return {
         "certificate_id": record.certificate_id,
@@ -88,6 +109,19 @@ def _get_record(certificate_id: str, db: Session) -> Certificate:
         raise HTTPException(status_code=404, detail="Certificate not found")
 
     return record
+
+
+def _pki_call(function, *args, **kwargs):
+    """Call the PKI; certificates are held in memory, so a restarted server
+    no longer knows certificates issued before the restart."""
+    try:
+        return function(*args, **kwargs)
+    except LifecycleError:
+        raise HTTPException(
+            status_code=409,
+            detail="The PKI no longer holds this certificate (the server was restarted). "
+                   "Reset the demo data or issue a new certificate."
+        )
 
 
 @router.post("/issue")
@@ -137,7 +171,7 @@ def get_pki_record(
 ):
     """Person 2's full status record, including lifecycle history."""
     record = _get_record(certificate_id, db)
-    return pki.get_certificate(record.external_cert_id)
+    return _pki_call(pki.get_certificate, record.external_cert_id)
 
 
 @router.post("/{certificate_id}/validate")
@@ -147,7 +181,7 @@ def validate_certificate(
     pki=Depends(get_pki_adapter)
 ):
     record = _get_record(certificate_id, db)
-    return pki.validate_certificate(record.external_cert_id)
+    return _pki_call(pki.validate_certificate, record.external_cert_id)
 
 
 @router.post("/{certificate_id}/migrate")
@@ -183,7 +217,7 @@ def migrate_certificate(
         raise HTTPException(status_code=400, detail="Migration plan has no target mode")
 
     try:
-        info = pki.migrate_certificate(record.external_cert_id, plan.target_mode, approved=True)
+        info = _pki_call(pki.migrate_certificate, record.external_cert_id, plan.target_mode, approved=True)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
 

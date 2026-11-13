@@ -236,4 +236,28 @@ def create_default_registry() -> AlgorithmRegistry:
         quantum_vulnerable=False,
         notes="registered as evaluated candidate only; no provider implemented",
     )
+    # Legacy classical algorithms found in asset inventories. They are never
+    # selectable as migration targets, but the platform needs them in the
+    # catalog to assess deployed assets as quantum-vulnerable.
+    for algorithm_id, display_name, standard, security_level in _LEGACY_CLASSICAL:
+        registry.register_candidate(
+            algorithm_id=algorithm_id,
+            display_name=display_name,
+            family="classical",
+            standard=standard,
+            parameter_set=display_name,
+            security_level=security_level,
+            quantum_vulnerable=True,
+            notes="legacy algorithm, inventory only; broken by a cryptographically relevant quantum computer",
+        )
     return registry
+
+
+#: (id, name, standard, classical security) for inventory-only legacy algorithms
+_LEGACY_CLASSICAL = (
+    ("rsa2048", "RSA-2048", "PKCS #1 v2.2 / FIPS 186-5", "112-bit classical"),
+    ("rsa3072", "RSA-3072", "PKCS #1 v2.2 / FIPS 186-5", "128-bit classical"),
+    ("ecdsa-p256", "ECDSA P-256", "FIPS 186-5", "128-bit classical"),
+    ("ecdsa-p384", "ECDSA P-384", "FIPS 186-5", "192-bit classical"),
+    ("ed25519", "Ed25519", "RFC 8032 / FIPS 186-5", "128-bit classical"),
+)

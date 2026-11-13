@@ -38,9 +38,16 @@ def test_primary_configuration_is_implemented(registry):
 
 def test_unknown_algorithm_raises_without_fallback(registry):
     with pytest.raises(UnsupportedAlgorithmError):
-        registry.get_provider("rsa2048")
+        registry.get_provider("rsa1024")
     with pytest.raises(UnsupportedAlgorithmError):
         registry.get_provider("mldsa99")
+
+
+def test_legacy_inventory_algorithm_is_known_but_not_selectable(registry):
+    entry = registry.get("rsa2048")
+    assert entry.quantum_vulnerable is True and entry.implemented is False
+    with pytest.raises(ProviderUnavailableError):  # never falls back to rsa4096
+        registry.get_provider("rsa2048")
 
 
 def test_candidate_without_provider_is_reported(registry):
