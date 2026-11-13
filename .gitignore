@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+venv/
+
+# local dev/test key material - never commit
+*.key.json
+*.pub.json
+keys/
+dev_keys/
+
+# Office / temporary files
+~$*
+~$*.docx
+
+# Environment and secrets
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+
+# editors/OS
+.idea/
+.vscode/
+Thumbs.db
+.DS_Store
