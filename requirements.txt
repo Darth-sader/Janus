@@ -1,0 +1,13 @@
+# Crypto layer (Poojita) + PKI (Ayanna)
+cryptography>=50
+pqcrypto>=1.0.0
+
+# Migration platform (Pranshita)
+fastapi==0.162.0
+uvicorn[standard]==0.54.0
+SQLAlchemy==2.1.6
+pydantic==2.14.2
+httpx==0.28.1
+
+# Tests
+pytest>=8.0
