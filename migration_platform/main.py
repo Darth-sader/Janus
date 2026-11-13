@@ -1,7 +1,9 @@
 from fastapi import FastAPI
 from migration_platform.api.assessments import router as assessments_router
 from migration_platform.api.recommendations import router as recommendations_router
-from migration_platform.database import create_tables
+from migration_platform.database import SessionLocal, create_tables
+from migration_platform.integrations.algorithm_sync import sync_algorithms
+from migration_platform.integrations.bootstrap import connect
 from migration_platform.api.assets import router as assets_router
 from migration_platform.api.crypto_configs import router as crypto_configs_router
 from migration_platform.api.algorithms import router as algorithms_router
@@ -10,6 +12,7 @@ from migration_platform.api.checklists import router as checklists_router
 from migration_platform.api.migration_status import router as migration_status_router
 from migration_platform.api.dashboard import router as dashboard_router
 from migration_platform.api.reports import router as reports_router
+from migration_platform.api.certificates import router as certificates_router
 import migration_platform.models
 
 
@@ -24,6 +27,15 @@ app = FastAPI(
 def startup():
     create_tables()
 
+    # Connect Person 1's crypto layer and Person 2's PKI, then load the
+    # algorithm catalog so recommendations see the real capabilities.
+    crypto_adapter, _ = connect()
+    db = SessionLocal()
+    try:
+        sync_algorithms(db, crypto_adapter)
+    finally:
+        db.close()
+
 
 app.include_router(assets_router)
 app.include_router(crypto_configs_router)
@@ -35,6 +47,7 @@ app.include_router(checklists_router)
 app.include_router(migration_status_router)
 app.include_router(dashboard_router)
 app.include_router(reports_router)
+app.include_router(certificates_router)
 
 @app.get("/")
 def home():

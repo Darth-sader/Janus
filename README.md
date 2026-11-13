@@ -1,139 +1,72 @@
-# Hybrid Post-Quantum PKI — Cryptography Layer (Poojita's workstream)
+# Janus
 
-Crypto-agile cryptography layer for the Hybrid PQ/T PKI & Cryptographic Migration Assistance Framework:
-a common `CryptoProvider` interface, RSA-4096 + ML-DSA (FIPS 204) providers, SLH-DSA (FIPS 205) as an
-additional PQ family, the parallel/composite **RSA4096-MLDSA** hybrid construction, the conceptual
-**hybrid certificate** architecture, and the **crypto-agility / migration-logic** surface consumed by
-the migration platform.
+Bringing classical and post-quantum cryptography together through hybrid signatures, crypto-agile PKI,
+and evidence-driven migration for critical infrastructure.
 
-Primary configuration (per the Technical Design Specification):
-**classical = RSA-4096** · **PQ = ML-DSA-65** · **hybrid = RSA-4096 + ML-DSA** · SLH-DSA as candidate family.
+Janus is a **cryptographic migration advisor**: it inventories assets and their cryptography, assesses them
+on five dimensions, recommends a deterministic, explainable migration (maintain / monitor / hybrid / PQ /
+replacement), and, once a human approves, moves the asset's certificate **classical → hybrid → PQ-ready**.
 
-All primitives come from maintained libraries — `cryptography` (OpenSSL) for RSA-PSS and `pqcrypto`
-(FIPS 204/205 conformant Rust bindings) for ML-DSA/SLH-DSA. Nothing is hand-implemented.
+Primary algorithms: **RSA-4096** (classical) · **ML-DSA-65, FIPS 204** (primary PQ) · **RSA-4096 + ML-DSA**
+(hybrid, RFC 9794 terminology) · **SLH-DSA, FIPS 205** (PQ candidate).
 
-## Module layout
+## Architecture
 
 ```
-crypto/                          cryptography layer (Phases 1-3)
-├── errors.py                    exception hierarchy (key-material-free messages)
-├── keys/                        algorithm-tagged key types + dev/test key store
-├── rsa/                         RSA-4096 provider (RSASSA-PSS, SHA-256, salt=32)
-├── pq/                          ML-DSA (FIPS 204) + SLH-DSA (FIPS 205) providers
-├── hybrid/                      HybridSignature, HybridSigner, HybridVerifier, generic adapter
-├── verification/                shared result types (overall + per-component diagnostics)
-└── certificates/                conceptual hybrid certificate model + PKI interface contracts
-
-crypto_agility/                  crypto-agility layer (Phase 4)
-├── interfaces/                  the CryptoProvider contract + capability records
-├── policies/                    algorithm registry + provider selection (no silent fallback)
-└── migration_logic/             capability catalog, transition modes, performance metrics
-
-tests/crypto/                    independently runnable test suite (no teammates' modules needed)
-docs/                            interface contracts for the other workstreams
-examples/demo.py                 end-to-end demonstration with measured numbers
+ migration_platform/  (Pranshita)   inventory · assessment · recommendation · plans · approval · checklist · API
+        │  CryptoAdapter                                   │  PKIAdapter
+        ▼                                                  ▼
+ crypto_agility/ + crypto/  (Poojita)   ◄── ML-DSA ──   pki/  (Ayanna)
+ CryptoProvider: RSA-4096 · ML-DSA ·     verification    Root/Intermediate CA · X.509 classical/hybrid/PQ
+ SLH-DSA · hybrid; registry; feasibility;                certificates · chain validation · CRLs · renew/rotate/migrate
+ performance metrics
 ```
 
-## Quickstart
+How the layers connect (`migration_platform/integrations/bootstrap.py` is the single wiring point):
+
+| From → to | What flows |
+|---|---|
+| crypto → platform | Algorithm catalog (synced into the DB at startup), mode feasibility used by recommendations, measured performance |
+| crypto → PKI | Which PQ algorithms are available (no silent fallback); every ML-DSA signature the PKI checks is verified by the crypto layer's `CryptoProvider` (`pki/crypto_bridge.py`) |
+| PKI → platform | Certificate status records and validation results; `/certificates/{id}/migrate` reissues a certificate in the plan's target mode **only for an approved, started migration plan** |
+
+## Layout
+
+| Path | Owner | Docs |
+|---|---|---|
+| `crypto/`, `crypto_agility/` | Poojita: PQ crypto & architecture | [docs/crypto_layer.md](docs/crypto_layer.md), [docs/crypto_capabilities_interface.md](docs/crypto_capabilities_interface.md), [docs/hybrid_certificate_architecture.md](docs/hybrid_certificate_architecture.md) |
+| `pki/`, `demo_pki.py` | Ayanna: PKI engineering | [pki/README.md](pki/README.md) |
+| `migration_platform/` | Pranshita: migration platform | API docs at `/docs` when the server runs |
+| `tests/test_integration_end_to_end.py` | all | the full SUBSTATION-017 flow through the HTTP API |
+
+## Quick start
 
 ```bash
-# Python 3.10+; from the project root
-pip install -e .[dev]           # or: pip install cryptography pqcrypto pytest
+pip install -r requirements.txt
 
-python -m pytest tests/ -q      # run the full test suite
-python examples/demo.py         # end-to-end demo: sign -> verify -> tamper -> certify -> benchmark
+python -m pytest                                  # crypto, PKI, platform and end-to-end tests
+python examples/demo.py                           # crypto layer: sign, verify, tamper, benchmark
+python demo_pki.py --fast                         # PKI: classical -> hybrid migration, attacks rejected
+uvicorn migration_platform.main:app --reload      # platform API; open http://127.0.0.1:8000/docs
 ```
 
-## The CryptoProvider interface
+On startup the platform builds a hybrid RSA-4096 + ML-DSA-65 CA hierarchy (set `JANUS_RSA_KEY_SIZE=2048`
+for faster starts) and syncs the algorithm catalog from the crypto layer.
 
-Every algorithm is reachable through the same contract (`crypto_agility/interfaces/provider.py`):
+### Typical API flow
 
-```python
-from crypto import RSA4096Provider, MLDSAProvider
+1. `POST /assets/` and `POST /crypto-configs/` (algorithm ids from the catalog, e.g. `rsa4096`)
+2. `POST /certificates/issue` with `{"asset_id", "common_name", "mode": "classical"}`
+3. `POST /assessments/asset/{asset_id}` and then `POST /recommendations/asset/{asset_id}`
+4. `POST /migration-plans/recommendation/{recommendation_id}`, then `/approve` and `/start`
+5. `POST /certificates/{certificate_id}/migrate` with `{"migration_id"}`, which returns the hybrid certificate and its validation
+6. Work through `/migration-plans/{id}/checklist`, then `/complete`
 
-provider = MLDSAProvider("mldsa65")           # or RSA4096Provider()
-kp = provider.generate_keypair()
-sig = provider.sign(message, kp.private_key)
-provider.verify(message, sig, kp.public_key)  # True / False (never raises on bad signature)
-provider.serialize_public_key(kp.public_key)  # deterministic wire bytes
-...  # deserialize_public_key / serialize_signature / deserialize_signature
-```
+## Known limitations (prototype)
 
-Contract rules: `verify()` is a predicate (malformed **inputs** raise `crypto.errors.*`, a wrong
-signature returns `False`); providers validate key type, size and parameter set; errors never contain
-key material; `PrivateKey.__repr__` is redacted.
-
-## Hybrid signatures (RSA4096-MLDSA)
-
-Parallel/composite construction per RFC 9794 terminology — both components sign the **same** message
-bytes (no novel combiner), serialized as canonical JSON matching the specification:
-
-```json
-{"algorithm": "RSA4096-MLDSA", "rsa_signature": "<b64>", "mldsa_signature": "<b64>"}
-```
-
-```python
-from crypto.hybrid import HybridSigner, HybridVerifier, HybridAcceptancePolicy
-
-sig = HybridSigner(rsa_provider, mldsa_provider).sign(message, rsa_sk, mldsa_sk)
-result = HybridVerifier(rsa_provider, mldsa_provider).verify(message, sig, rsa_pk, mldsa_pk)
-result.accepted        # True only under the STRICT_TWO_COMPONENT policy
-result.components      # per-component diagnostics (VERIFIED / INVALID / MISSING / ...)
-```
-
-Acceptance policy is explicit and strict: **both** components must verify; a single valid component is
-never accepted; missing/malformed/mismatched components are reported individually.
-
-## Hybrid certificates (architecture — Ayanna implements the PKI)
-
-`crypto/certificates/` defines the conceptual model (subject, both public keys, issuer, serial,
-validity, extensions, hybrid signature info), the exact deterministic to-be-signed bytes that **both**
-CA signature components cover, and the signing/verification services the PKI layer calls. It is
-deliberately **not** an X.509 encoding — the profile/encoding decision is an open item documented in
-**[docs/hybrid_certificate_architecture.md](docs/hybrid_certificate_architecture.md)**.
-
-## Crypto-agility & migration logic (Pranshita consumes this)
-
-```python
-from crypto_agility.policies import create_default_registry, CryptoConfiguration, CryptoMode, ProviderSelector
-from crypto_agility.migration_logic import CryptoCapabilityCatalog, TransitionOptions, measure_algorithms
-
-registry = create_default_registry()          # rsa4096, mldsa44/65/87, slhdsa-sha2-128s, RSA4096-MLDSA, picnic*
-selector = ProviderSelector(registry, CryptoConfiguration(CryptoMode.HYBRID))
-selector.provider()                           # one uniform interface for classical / pq / hybrid modes
-CryptoCapabilityCatalog(registry).capability_report()   # PQCAlgorithm-aligned records for the platform
-measure_algorithms(registry, ["mldsa65"])     # measured keygen/sign/verify + sizes
-```
-
-Exact lookups, explainable errors, no silent algorithm fallback; declared-but-unimplemented candidates
-(like `picnic`) are visible to the platform but never selectable. The full handoff API with sample
-calls and outputs: **[docs/crypto_capabilities_interface.md](docs/crypto_capabilities_interface.md)**.
-
-## Canonical algorithm identifiers
-
-| id | algorithm | standard | quantum-vulnerable |
-|---|---|---|---|
-| `rsa4096` | RSA-4096 (RSASSA-PSS, SHA-256) | FIPS 186-5 / PKCS#1 v2.2 | yes |
-| `mldsa44` / `mldsa65` / `mldsa87` | ML-DSA | FIPS 204 | no |
-| `slhdsa-sha2-128s` (+10 more sets) | SLH-DSA | FIPS 205 | no |
-| `RSA4096-MLDSA` | hybrid composite | RFC 9794 terminology | no (composite) |
-
-## Design decisions worth knowing
-
-- **RSA-PSS parameters are explicit**: SHA-256, MGF1-SHA-256, salt = 32 bytes (digest length), e = 65537, key size pinned to 4096 bits.
-- **ML-DSA parameter sets are part of the algorithm id** (`mldsa65`), so a key from one parameter set can never be used with another — enforced on every operation.
-- **Serialization is deterministic** everywhere (canonical JSON, sorted keys, fixed field order); round trips are tested.
-- **Key storage** (`crypto/keys/storage.py`) is for development/test keys only: documented JSON envelope, optional passphrase encryption (PBKDF2-HMAC-SHA256 + Fernet). Production CA key management belongs to the PKI workstream.
-- **Error hygiene**: third-party exceptions are normalized to `crypto.errors.*`; messages carry identifiers and lengths, never key bytes; `verify()` failing is `False`, not an exception.
-
-## Ownership boundaries (spec §30)
-
-| Workstream | Owns |
-|---|---|
-| **Poojita (this repo section)** | `crypto/`, `crypto_agility/`, hybrid design, high-level certificate architecture; integration + final validation after handoff |
-| **Ayanna** | `pki/` — Root/Intermediate CA, issuance, chains, revocation, renewal, rotation |
-| **Pranshita** | `platform/` — inventory, assessment, recommendations, migrations, checklist, DB, API, dashboard |
-
-Deliberately **out of scope** here: CA implementation, asset assessment, recommendation engine, and
-any new cryptographic primitive. Phases 5–6 (connecting modules end-to-end, system-wide validation)
-start once the teammates' modules land.
+- The PKI's hybrid X.509 encoding is modelled on X.509 alternative-signature extensions. It is not a
+  standard and has not been tested for interoperability (see `pki/README.md`).
+- X.509 RSA signatures use PKCS#1 v1.5 and are verified by `cryptography`. The crypto layer's RSA
+  provider (RSA-PSS) is used for its own hybrid signatures and benchmarks.
+- The crypto layer's JSON `HybridCertificateModel` is a reference architecture. The PKI issues X.509.
+- The PKI keeps certificates in memory, so a server restart loses them while the platform DB keeps its records.

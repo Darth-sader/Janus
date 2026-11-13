@@ -10,6 +10,11 @@ Import layout keeps dependencies acyclic:
   migration platform (import ``crypto_agility.policies``)
 """
 
+# crypto_agility.interfaces imports crypto.keys, which initializes the crypto
+# package, whose providers import crypto_agility.interfaces back. Loading
+# crypto first lets "import crypto_agility" work as the first import too.
+import crypto  # noqa: F401
+
 from .interfaces.capabilities import ProviderCapabilities
 from .interfaces.provider import CryptoProvider
 

@@ -125,6 +125,7 @@ class CertificateManager:
 
     def issue(self, ca: CertificateAuthority, common_name: str, dns_names: list[str] | None = None,
               mode: CertMode | None = None, validity_days: int | None = None) -> ManagedCertificate:
+        mode = CertMode(mode) if mode is not None else None  # accept "hybrid" etc. from the platform
         mc = ManagedCertificate(uuid.uuid4().hex[:12], common_name, dns_names or [common_name], ca)
         mc.history.append(StateChange(None, S.GENERATE, datetime.now(timezone.utc), "key pair requested"))
         issued = issue_certificate(ca, common_name, mc.dns_names, validity_days, mode=mode)
@@ -143,7 +144,7 @@ class CertificateManager:
         mc = self.get(cert_id)
         old_cert, old_issuer = mc.certificate, mc.issuer
         new_issuer = ca or mc.issuer
-        target_mode = mode or mc.mode
+        target_mode = CertMode(mode) if mode is not None else mc.mode
         changes_mode = target_mode is not mc.mode
         rotate_key = rotate_key or changes_mode
         if changes_mode:

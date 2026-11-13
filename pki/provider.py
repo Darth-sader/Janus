@@ -2,8 +2,9 @@
 
 Everything in ca.py / issuance.py signs through a CertificateSigner, never by
 calling RSA or ML-DSA directly, so changing algorithms means changing this
-file only. When Person 1's CryptoProvider is ready, these signers can
-delegate key generation and signing to it.
+file only. Signing stays on `cryptography` key objects because X.509
+building needs them; the crypto layer decides which PQ algorithms are
+available (signer_for) and verifies ML-DSA signatures (crypto_bridge.py).
 
 A signer describes the certificate being *made* (its subject's keys). The
 issuer's key decides what the issuer can sign with:
@@ -19,7 +20,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from pki import hybrid
+from pki import crypto_bridge, hybrid
 from pki.config import PKIConfig
 from pki.hybrid import HybridPrivateKey
 from pki.models import CertMode
@@ -130,6 +131,9 @@ class HybridSigner:
 
 
 def signer_for(mode: CertMode, config: PKIConfig) -> CertificateSigner:
+    mode = CertMode(mode)
+    if mode is not CertMode.CLASSICAL:
+        crypto_bridge.require_available(config.pq_algorithm)
     if mode is CertMode.CLASSICAL:
         return RSASigner(config.rsa_key_size)
     if mode is CertMode.HYBRID:

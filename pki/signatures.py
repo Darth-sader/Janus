@@ -1,8 +1,12 @@
-"""Checking a certificate's signature(s) against its issuer, for every mode."""
+"""Checking a certificate's signature(s) against its issuer, for every mode.
+
+ML-DSA signatures are verified through the crypto layer's CryptoProvider
+(see crypto_bridge.py); RSA signatures through X.509's own verification.
+"""
 from cryptography import x509
 from cryptography.exceptions import InvalidSignature
 
-from pki import hybrid
+from pki import crypto_bridge, hybrid
 from pki.models import ValidationReason
 
 
@@ -20,10 +24,8 @@ def _verify_main_signature(cert: x509.Certificate, issuer: x509.Certificate) -> 
         issuer_key = hybrid.pq_public_key(issuer)
         if issuer_key is None:
             raise SignatureError(ValidationReason.BAD_SIGNATURE, "issuer has no ML-DSA key")
-        try:
-            issuer_key.verify(cert.signature, cert.tbs_certificate_bytes)
-        except InvalidSignature:
-            raise SignatureError(ValidationReason.BAD_SIGNATURE, f"{pq_name} signature does not verify") from None
+        if not crypto_bridge.verify_ml_dsa(issuer_key, cert.signature, cert.tbs_certificate_bytes):
+            raise SignatureError(ValidationReason.BAD_SIGNATURE, f"{pq_name} signature does not verify")
         return pq_name
     try:
         cert.verify_directly_issued_by(issuer)
@@ -41,10 +43,8 @@ def _verify_alt_signature(cert: x509.Certificate, issuer: x509.Certificate) -> s
     expected_algorithm = hybrid.alt_signature_algorithm_extension(issuer_key).value
     if hybrid.alt_signature_algorithm(cert) != expected_algorithm:
         raise SignatureError(ValidationReason.BAD_PQ_SIGNATURE, "ML-DSA algorithm does not match the issuer's key")
-    try:
-        issuer_key.verify(hybrid.alt_signature(cert), hybrid.pre_tbs_bytes(cert))
-    except InvalidSignature:
-        raise SignatureError(ValidationReason.BAD_PQ_SIGNATURE, "ML-DSA signature does not verify") from None
+    if not crypto_bridge.verify_ml_dsa(issuer_key, hybrid.alt_signature(cert), hybrid.pre_tbs_bytes(cert)):
+        raise SignatureError(ValidationReason.BAD_PQ_SIGNATURE, "ML-DSA signature does not verify")
     return hybrid.ml_dsa_name(issuer_key)
 
 

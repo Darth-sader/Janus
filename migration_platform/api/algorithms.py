@@ -30,6 +30,11 @@ def get_crypto_adapter():
     return _crypto_adapter
 
 
+def optional_crypto_adapter():
+    """The adapter if connected, else None (callers degrade gracefully)."""
+    return _crypto_adapter
+
+
 @router.post("/sync")
 def synchronize_algorithms(
     db: Session = Depends(get_db),
